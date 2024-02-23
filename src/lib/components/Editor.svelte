@@ -1,9 +1,7 @@
 <script lang="ts">
-	import { computePosition, offset, shift, arrow, flip } from '@floating-ui/dom';
-	import { text } from '@sveltejs/kit';
+	import { computePosition, shift, flip } from '@floating-ui/dom';
 	import { SvelteComponent, afterUpdate, tick } from 'svelte';
 
-	export let splitFunc: (str: string) => string[] = (text) => text.split('\n');
 	export let content: string;
 	export let keywordMap: {
 		[key: string]: {
@@ -14,6 +12,7 @@
 		};
 	} = {};
 
+	const splitFunc: (str: string) => string[] = (text) => text.split('\n');
 	const NON_BREAKING_DASH = '‑';
 	const makeDashesNonBreaking = (str: string) => str.replaceAll('-', NON_BREAKING_DASH);
 	const makeDashesBreaking = (str: string) => str.replaceAll(NON_BREAKING_DASH, '-');
@@ -52,8 +51,10 @@
 		acc.push(nextIndex);
 		return acc;
 	}, [] as number[]);
+	$: console.log('keywordindices', keywordIndices);
 
 	let keywordLocations: { [key: string]: { top: number; left: number } } = {};
+	let keywordLocationToIndex: { [key: string]: number } = {};
 	let editorScrollHeight = 0;
 	let textAreaRef: HTMLTextAreaElement | null = null;
 	let caretRef: HTMLElement | null = null;
@@ -103,6 +104,22 @@
 		menuItem?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 	};
 
+	// returns true if keyword is under caret position
+	// TODO: make it so that it returns the keyword and its location
+
+	const isOnKeyword = (caretPos: number): number | undefined => {
+		for (let i = 0; i < keywordIndices.length - 1; i++) {
+			let currInd = keywordIndices[i];
+			if (caretPos === currInd) return Math.floor(i / 2);
+			if (caretPos >= currInd && caretPos < keywordIndices[i + 1]) {
+				if (i % 2 === 0) return i / 2;
+			}
+		}
+	};
+
+	$: indexOfCursoredKeyword = isOnKeyword(caretPosition);
+	$: console.log({ indexOfCursoredKeyword });
+
 	// returns the right boundary if caret position is on left boundary
 	const isOnEndBoundary = (caretPos: number): number | undefined => {
 		const indexOfKeyword = keywordIndices.indexOf(caretPos);
@@ -113,14 +130,10 @@
 		}
 		return undefined;
 	};
-	const isOnStartBoundary = (caretPos: number): number | undefined => {
-		const indexOfKeyword = keywordIndices.indexOf(caretPos);
-		// looking for EVEN keywords indices for STARTS of keywords
-		if (indexOfKeyword >= 0 && indexOfKeyword % 2 === 0) {
-			const targetIndex = keywordIndices[indexOfKeyword + 1];
-			return targetIndex;
-		}
-		return undefined;
+
+	const processKeyUp = (evt: KeyboardEvent) => {
+		//@ts-ignore
+		caretPosition = evt.target.selectionEnd;
 	};
 
 	const processKeyDown = (evt: KeyboardEvent) => {
@@ -184,7 +197,6 @@
 			evt.key === 'Enter' &&
 			shownMenuOptions[menuPosition] !== undefined
 		) {
-			console.log('triggered', showingSlashMenu, evt.key);
 			const insertedStr = showingSlashMenu + shownMenuOptions[menuPosition] + ' ';
 			insertMenuOption(insertedStr);
 			evt.preventDefault();
@@ -204,23 +216,29 @@
 			// moving through keyword if to the left
 
 			if (evt.key === 'ArrowLeft') {
-				const targetIndex = isOnEndBoundary(caretPosition);
+				const keywordIndex = isOnKeyword(caretPosition);
+				const targetIndex =
+					keywordIndex !== undefined ? keywordIndices[keywordIndex * 2] : undefined;
 				// if first split is keyword, we are looking for
 				// looking for ODD keywords indices for ENDS of keywords
 				if (targetIndex !== undefined) {
 					textAreaRef?.focus();
 					textAreaRef?.setSelectionRange(targetIndex, targetIndex);
 				}
+				resetMenu();
 			}
 			// moving through keyword if to the right
 			if (evt.key === 'ArrowRight') {
-				const targetIndex = isOnStartBoundary(caretPosition);
+				const keywordIndex = isOnKeyword(caretPosition);
+				const targetIndex =
+					keywordIndex !== undefined ? keywordIndices[keywordIndex * 2 + 1] : undefined;
 				// if first split is keyword, we are looking for
 				// looking for ODD keywords indices for ENDS of keywords
 				if (targetIndex !== undefined) {
 					textAreaRef?.focus();
 					textAreaRef?.setSelectionRange(targetIndex, targetIndex);
 				}
+				resetMenu();
 			}
 			if (evt.key === 'Backspace') {
 				// check if on end boundary to delete keyword afterwards
@@ -233,24 +251,27 @@
 					textAreaRef?.setRangeText('');
 					textAreaRef?.setSelectionRange(targetIndex, targetIndex);
 				}
+				resetMenu();
 			}
-			resetMenu();
 		}
 		textBeforeCaret = content.substring(0, caretPosition);
 	};
 
 	afterUpdate(() => {
 		keywordLocations = {};
+		keywordLocationToIndex = {};
+		let counter = 0;
 		formatted_paragraphs.forEach((paragraph, paragraph_index) => {
 			paragraph.forEach((clause, clause_index) => {
 				if (getKeywordMatch(clause)) {
-					const underblock = document.getElementById(
-						`underblock-${paragraph_index},${clause_index}`
-					);
-					keywordLocations[`${paragraph_index},${clause_index}`] = {
+					const keyword_key = `${paragraph_index},${clause_index}`;
+					const underblock = document.getElementById(`underblock-${keyword_key}`);
+					keywordLocations[keyword_key] = {
 						top: underblock?.offsetTop || 0,
 						left: underblock?.offsetLeft || 0
 					};
+					keywordLocationToIndex[keyword_key] = counter;
+					counter++;
 				}
 			});
 		});
@@ -317,7 +338,7 @@
 		<!-- THE EDITOR -->
 		<textarea
 			style:height="{editorScrollHeight}px"
-			class="absolute top-0 z-10 block min-h-full w-full resize-none break-after-right whitespace-pre-line bg-transparent p-3 leading-6 caret-black"
+			class="absolute top-0 z-10 block min-h-full w-full resize-none bg-transparent p-3 leading-6 caret-black"
 			value={content}
 			bind:this={textAreaRef}
 			on:input={(evt) => {
@@ -338,13 +359,10 @@
 				//@ts-ignore
 				content = evt?.target?.value;
 			}}
+			on:keyup={processKeyUp}
 			on:keydown={processKeyDown}
 			on:click={() => {
 				showingSlashMenu = null;
-			}}
-			on:selectionchange={(evt) => {
-				//@ts-ignore
-				caretPosition = evt.target.selectionStart;
 			}}
 		/>
 		<!-- THE OVERLAY -->
@@ -352,17 +370,22 @@
 			{#each formatted_paragraphs as paragraph, paragraph_index}
 				{#each paragraph as clause, clause_index}
 					{@const match = getKeywordMatch(clause)}
-					{@const location = keywordLocations[`${paragraph_index},${clause_index}`]}
+					{@const keyword_key = `${paragraph_index},${clause_index}`}
+					{@const location = keywordLocations[keyword_key]}
 					{#if match !== undefined && location !== undefined}
 						{@const component = keywordMap[match].component}
 						{#if component}
 							<span
 								class="z-20 leading-6"
 								style:position="absolute"
-								style:top="{keywordLocations[`${paragraph_index},${clause_index}`]?.top}px"
-								style:left="{keywordLocations[`${paragraph_index},${clause_index}`]?.left}px"
+								style:top="{keywordLocations[keyword_key]?.top}px"
+								style:left="{keywordLocations[keyword_key]?.left}px"
 							>
-								<svelte:component this={component}>
+								<svelte:component
+									this={component}
+									focusedIndex={indexOfCursoredKeyword}
+									index={keywordLocationToIndex[keyword_key]}
+								>
 									{clause}
 								</svelte:component>
 							</span>
