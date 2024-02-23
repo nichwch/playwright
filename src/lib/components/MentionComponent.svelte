@@ -1,8 +1,19 @@
-<button
-	on:click={() => {
-		window.alert('hello');
-	}}
-	class="border-box block border border-blue-700 bg-blue-200 text-blue-700 hover:bg-blue-300"
->
-	<slot />
-</button>
+<script lang="ts">
+	import * as HoverCard from '$lib/components/ui/hover-card';
+	export let index: number;
+	export let focusedIndex: number;
+</script>
+
+<HoverCard.Root openDelay={0}>
+	<HoverCard.Trigger
+		><button
+			on:click={() => {}}
+			class:bg-blue-300={index === focusedIndex}
+			class:bg-blue-200={index !== focusedIndex}
+			class="border-box block border border-blue-700 text-blue-700 transition-colors hover:bg-blue-300"
+		>
+			<slot />
+		</button></HoverCard.Trigger
+	>
+	<HoverCard.Content>More information about this user.</HoverCard.Content>
+</HoverCard.Root>
